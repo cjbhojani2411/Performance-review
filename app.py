@@ -109,10 +109,10 @@ st.subheader("✅ Output Sheet")
 st.dataframe(summary_df, width="stretch")  # ✅ UI table
 
 # Optional: show in logs + UI text
-with st.expander("See output as text / logs"):
-    st.text(summary_df.to_string(index=False))
-    print("\n=== OUTPUT SHEET ===")
-    print(summary_df.to_string(index=False))
+#with st.expander("See output as text / logs"):
+#    st.text(summary_df.to_string(index=False))
+#    print("\n=== OUTPUT SHEET ===")
+#    print(summary_df.to_string(index=False))
 
 # Download CSV
 csv_bytes = summary_df.to_csv(index=False).encode("utf-8")
