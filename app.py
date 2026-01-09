@@ -42,21 +42,20 @@ def generate_summary(df: pd.DataFrame) -> pd.DataFrame:
     summary = summary.sort_values(["Month", "EmployeeID", "Name"]).reset_index(drop=True)
     return summary
     
-def detect_header_row(file) -> int:
+def detect_header_row(file, ext: str) -> int:
     """
     Reads the sheet without headers and tries to find the row that contains
-    Month/Name/Score (case-insensitive). Returns header row index.
+    Month/Name/Score (case-insensitive). Works for xls/xlsx.
     """
-    preview = pd.read_excel(file, header=None, engine="xlrd")
+    engine = "xlrd" if ext == "xls" else "openpyxl"
+    preview = pd.read_excel(file, header=None, engine=engine)
     wanted = {"month", "name", "score"}
 
-    for i in range(min(30, len(preview))):
+    for i in range(min(50, len(preview))):
         row_vals = preview.iloc[i].astype(str).str.strip().str.lower().tolist()
-        row_set = set(row_vals)
-        if wanted.issubset(row_set):
+        if wanted.issubset(set(row_vals)):
             return i
-    return 1  # fallback (your old default)
-
+    return 0  # safer default for excel
 
 st.title("📊 Performance Review System")
 
@@ -73,26 +72,40 @@ if not uploaded:
 
 # Read XLS
 try:
-    # df = pd.read_excel(uploaded, header=int(header_row), engine="xlrd")
-    # Auto header detection
-    auto_header = detect_header_row(uploaded)
-    
-    # Let user override
-    header_row = st.sidebar.number_input(
-        "Header row (0-based index)",
-        min_value=0, max_value=50, value=int(auto_header),
-        help="Auto-detected header row. Change if needed."
-    )
-    
-    # Read again using selected header
-    uploaded.seek(0)  # reset file pointer (VERY IMPORTANT)
-    df = pd.read_excel(uploaded, header=int(header_row), engine="xlrd")
-    
-    # Clean column names
-    df.columns = df.columns.astype(str).str.strip()
+    filename = uploaded.name.lower()
+    ext = filename.split(".")[-1]
+
+    if ext == "csv":
+        # CSV: no excel engine needed
+        df = pd.read_csv(uploaded)
+        df.columns = df.columns.astype(str).str.strip()
+
+    elif ext in ("xls", "xlsx"):
+        # Excel: auto header detect + correct engine
+        auto_header = detect_header_row(uploaded, ext)
+        header_row = st.sidebar.number_input(
+            "Header row (0-based index)",
+            min_value=0, max_value=50, value=int(auto_header),
+            help="Auto-detected header row. Change if needed."
+        )
+
+        uploaded.seek(0)
+        engine = "xlrd" if ext == "xls" else "openpyxl"
+        df = pd.read_excel(uploaded, header=int(header_row), engine=engine)
+
+        # Clean column names
+        df.columns = (
+            df.columns.astype(str)
+            .str.strip()
+            .str.replace(r"\s+", " ", regex=True)
+        )
+
+    else:
+        st.error("Unsupported file type. Please upload .xls, .xlsx, or .csv")
+        st.stop()
 
 except Exception as e:
-    st.error(f"Failed to read XLS: {e}")
+    st.error(f"Failed to read file: {e}")
     st.stop()
 
 st.subheader("🔍 Raw Sheet Preview")
