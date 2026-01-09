@@ -1,13 +1,8 @@
-# performance_summary_csv.py
-# pip install pandas xlrd==2.0.1
-
-import os
 import re
 import pandas as pd
+import streamlit as st
 
-INPUT_XLS = r"/Users/pardypanda/Documents/PPS/Performance review/source/performance review.xls"
-OUTPUT_CSV = r"/Users/pardypanda/Documents/PPS/Performance review/output/performance_monthly_employee_scores.csv"
-
+st.set_page_config(page_title="Performance Review Summary", layout="wide")
 
 def extract_employee_id(name: str) -> str:
     if pd.isna(name):
@@ -15,60 +10,82 @@ def extract_employee_id(name: str) -> str:
     m = re.search(r"\bPPS\d+\b", str(name).upper())
     return m.group(0) if m else ""
 
-
 def clean_employee_name(name: str) -> str:
-    """
-    Removes employee code like 'PPS015 - ' from Name
-    """
     if pd.isna(name):
         return ""
     name = str(name)
-    # remove PPSxxx and surrounding separators
     name = re.sub(r"\bPPS\d+\b\s*[-–]?\s*", "", name, flags=re.IGNORECASE)
     return name.strip()
 
-
-def main():
-    if not os.path.exists(INPUT_XLS):
-        raise FileNotFoundError(f"File not found: {INPUT_XLS}")
-
-    df = pd.read_excel(INPUT_XLS, header=1, engine="xlrd")
-
+def generate_summary(df: pd.DataFrame) -> pd.DataFrame:
     required = {"Month", "Name", "Score"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"Missing columns {missing}. Found: {list(df.columns)}")
+        raise ValueError(f"Missing columns: {missing}. Found: {list(df.columns)}")
 
-    # Forward-fill Month (important)
+    df = df.copy()
     df["Month"] = df["Month"].ffill()
-
-    # Keep valid rows
     df = df[df["Name"].notna()].copy()
 
-    # Clean fields
     df["Score"] = pd.to_numeric(df["Score"], errors="coerce").fillna(0)
     df["EmployeeID"] = df["Name"].apply(extract_employee_id)
     df["Name"] = df["Name"].apply(clean_employee_name)
 
     summary = (
         df.groupby(["Month", "EmployeeID", "Name"], as_index=False)
-          .agg(
-              **{
-                  "Average Score": ("Score", "mean"),
-              }
-          )
+          .agg(**{"Average Score": ("Score", "mean")})
     )
 
     summary["Average Score"] = summary["Average Score"].round(2)
 
-    # Final output format (NO Total Score)
-    summary = summary[
-        ["Month", "EmployeeID", "Name", "Average Score"]
-    ].sort_values(["Month", "EmployeeID", "Name"])
+    summary = summary[["Month", "EmployeeID", "Name", "Average Score"]]
+    summary = summary.sort_values(["Month", "EmployeeID", "Name"]).reset_index(drop=True)
+    return summary
 
-    summary.to_csv(OUTPUT_CSV, index=False)
-    print("✅ CSV generated:", OUTPUT_CSV)
+st.title("📊 Performance Review System")
 
+header_row = st.sidebar.number_input(
+    "Header row (0-based index)", min_value=0, max_value=20, value=1,
+    help="Your sheet works with header=1 (second row)."
+)
 
-if __name__ == "__main__":
-    main()
+uploaded = st.file_uploader("Upload performance review file (.xls)", type=["xls"])
+
+if not uploaded:
+    st.info("Upload an .xls file to generate the summary.")
+    st.stop()
+
+# Read XLS
+try:
+    df = pd.read_excel(uploaded, header=int(header_row), engine="xlrd")
+except Exception as e:
+    st.error(f"Failed to read XLS: {e}")
+    st.stop()
+
+st.subheader("🔍 Raw Sheet Preview")
+st.dataframe(df.head(30), width="stretch")
+
+# Generate summary
+try:
+    summary_df = generate_summary(df)
+except Exception as e:
+    st.error(str(e))
+    st.stop()
+
+st.subheader("✅ Output Sheet")
+st.dataframe(summary_df, width="stretch")  # ✅ UI table
+
+# Optional: show in logs + UI text
+with st.expander("See output as text / logs"):
+    st.text(summary_df.to_string(index=False))
+    print("\n=== OUTPUT SHEET ===")
+    print(summary_df.to_string(index=False))
+
+# Download CSV
+csv_bytes = summary_df.to_csv(index=False).encode("utf-8")
+st.download_button(
+    "⬇️ Download CSV",
+    data=csv_bytes,
+    file_name="performance_monthly_employee_scores.csv",
+    mime="text/csv",
+)

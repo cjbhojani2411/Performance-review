@@ -1,11 +1,9 @@
 import re
-import os
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Performance Review Summary", layout="wide")
 
-# ---------- Helpers ----------
 def extract_employee_id(name: str) -> str:
     if pd.isna(name):
         return ""
@@ -25,14 +23,10 @@ def generate_summary(df: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Missing columns: {missing}. Found: {list(df.columns)}")
 
-    # Forward-fill Month (your sheet style)
     df = df.copy()
     df["Month"] = df["Month"].ffill()
-
-    # Keep rows that have a Name
     df = df[df["Name"].notna()].copy()
 
-    # Clean score + fields
     df["Score"] = pd.to_numeric(df["Score"], errors="coerce").fillna(0)
     df["EmployeeID"] = df["Name"].apply(extract_employee_id)
     df["Name"] = df["Name"].apply(clean_employee_name)
@@ -43,103 +37,88 @@ def generate_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     summary["Average Score"] = summary["Average Score"].round(2)
+
     summary = summary[["Month", "EmployeeID", "Name", "Average Score"]]
     summary = summary.sort_values(["Month", "EmployeeID", "Name"]).reset_index(drop=True)
     return summary
-
-def to_csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
-
-
-# ---------- UI ----------
-st.title("📊 Performance Review System (Monthly Average Score)")
-
-st.markdown(
+    
+def detect_header_row(file) -> int:
     """
-Upload your **performance review .xls** file and generate a clean monthly report:
+    Reads the sheet without headers and tries to find the row that contains
+    Month/Name/Score (case-insensitive). Returns header row index.
+    """
+    preview = pd.read_excel(file, header=None, engine="xlrd")
+    wanted = {"month", "name", "score"}
 
-**Month | EmployeeID | Name | Average Score**
-"""
+    for i in range(min(30, len(preview))):
+        row_vals = preview.iloc[i].astype(str).str.strip().str.lower().tolist()
+        row_set = set(row_vals)
+        if wanted.issubset(row_set):
+            return i
+    return 1  # fallback (your old default)
+
+
+st.title("📊 Performance Review System")
+
+header_row = st.sidebar.number_input(
+    "Header row (0-based index)", min_value=0, max_value=20, value=1,
+    help="Your sheet works with header=1 (second row)."
 )
 
-with st.sidebar:
-    st.header("⚙️ Settings")
-    header_row = st.number_input(
-        "Header row (0-based index)",
-        min_value=0, max_value=20, value=1,
-        help="Your file usually works with header=1 (2nd row). Change if columns don't match."
-    )
-
-    st.caption("Optional: Save output to disk (server/local machine path)")
-    save_to_disk = st.checkbox("Save CSV to output path", value=False)
-    output_path = st.text_input(
-        "Output CSV path",
-        value="/Users/pardypanda/Documents/PPS/Performance review/output/performance_monthly_employee_scores.csv",
-        disabled=not save_to_disk
-    )
-
-uploaded = st.file_uploader("📁 Upload performance review file (.xls)", type=["xls"])
+uploaded = st.file_uploader("Upload performance review file (.xls)", type=["xls"])
 
 if not uploaded:
-    st.info("Upload an .xls file to continue.")
+    st.info("Upload an .xls file to generate the summary.")
     st.stop()
 
-# Read Excel
+# Read XLS
 try:
+    # df = pd.read_excel(uploaded, header=int(header_row), engine="xlrd")
+    # Auto header detection
+    auto_header = detect_header_row(uploaded)
+    
+    # Let user override
+    header_row = st.sidebar.number_input(
+        "Header row (0-based index)",
+        min_value=0, max_value=50, value=int(auto_header),
+        help="Auto-detected header row. Change if needed."
+    )
+    
+    # Read again using selected header
+    uploaded.seek(0)  # reset file pointer (VERY IMPORTANT)
     df = pd.read_excel(uploaded, header=int(header_row), engine="xlrd")
+    
+    # Clean column names
+    df.columns = df.columns.astype(str).str.strip()
+
 except Exception as e:
-    st.error(f"Failed to read the XLS file: {e}")
+    st.error(f"Failed to read XLS: {e}")
     st.stop()
 
 st.subheader("🔍 Raw Sheet Preview")
-st.dataframe(df.head(30), use_container_width=True)
+st.dataframe(df.head(30), width="stretch")
 
-# Generate
-st.subheader("✅ Generated Summary")
+# Generate summary
 try:
     summary_df = generate_summary(df)
 except Exception as e:
     st.error(str(e))
     st.stop()
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Rows (Raw)", len(df))
-col2.metric("Rows (Summary)", len(summary_df))
-col3.metric("Employees (Unique)", summary_df["EmployeeID"].nunique())
+st.subheader("✅ Output Sheet")
+st.dataframe(summary_df, width="stretch")  # ✅ UI table
 
-st.dataframe(summary_df, use_container_width=True)
+# Optional: show in logs + UI text
+with st.expander("See output as text / logs"):
+    st.text(summary_df.to_string(index=False))
+    print("\n=== OUTPUT SHEET ===")
+    print(summary_df.to_string(index=False))
 
-# Download
-csv_bytes = to_csv_bytes(summary_df)
-
+# Download CSV
+csv_bytes = summary_df.to_csv(index=False).encode("utf-8")
 st.download_button(
-    label="⬇️ Download CSV",
+    "⬇️ Download CSV",
     data=csv_bytes,
     file_name="performance_monthly_employee_scores.csv",
     mime="text/csv",
 )
-
-# Optional save to disk
-if save_to_disk:
-    try:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        summary_df.to_csv(output_path, index=False)
-        st.success(f"✅ Saved to: {output_path}")
-    except Exception as e:
-        st.warning(f"Could not save file to disk: {e}")
-
-# Small extras
-with st.expander("➕ Optional filters"):
-    months = sorted(summary_df["Month"].dropna().unique().tolist())
-    selected_month = st.selectbox("Filter by Month", ["All"] + months)
-    if selected_month != "All":
-        st.dataframe(summary_df[summary_df["Month"] == selected_month], use_container_width=True)
-
-    emp_search = st.text_input("Search Name / EmployeeID")
-    if emp_search.strip():
-        q = emp_search.strip().lower()
-        filtered = summary_df[
-            summary_df["Name"].str.lower().str.contains(q, na=False) |
-            summary_df["EmployeeID"].str.lower().str.contains(q, na=False)
-        ]
-        st.dataframe(filtered, use_container_width=True)
