@@ -65,7 +65,7 @@ header_row = st.sidebar.number_input(
     help="Your sheet works with header=1 (second row)."
 )
 
-uploaded = st.file_uploader("Upload performance review file (.xls)", type=["xls"])
+uploaded = st.file_uploader("Upload performance review file (.xls)", type=["xls", "xlsx", "csv"])
 
 if not uploaded:
     st.info("Upload an .xls file to generate the summary.")
